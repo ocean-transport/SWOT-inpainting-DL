@@ -199,3 +199,103 @@ class llc4320_dataset(Dataset):
         
         return invar, outvar, metadata
 
+
+
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+def get_data_loaders(**data_loader_hparams):
+    """
+    Creates and returns data loaders for training, validation, and testing.
+    
+    Args:
+        **model_hparams: Dictionary containing model hyperparameters including:
+            - batch_size (int): Number of samples per batch
+            - Number_timesteps (int): N_t parameter for datasets
+            - mean_ssh/std_ssh (float): SSH normalization parameters
+            - mean_sst/std_sst (float): SST normalization parameters
+            - multiprocessing (bool): Enable multiprocessing
+            
+    Returns:
+        tuple: (train_data_loader, val_data_loader, test_data_loader)
+    """
+    # Detect available device
+    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    
+    # Define data paths
+    DATASET_PATH = data_loader_hparams["DATASET_PATH"]
+    CHECKPOINT_PATH = data_loader_hparams["CHECKPOINT_PATH"]
+    DRIVE_PATH = data_loader_hparams["DRIVE_PATH"]
+
+    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    if device == "cpu":
+        n_cpus = 0
+    else:
+        # Get available CPUs for parallel loading
+        n_cpus = torch.get_num_threads()
+        
+    # Load patch coordinates (excluding land)
+    patch_coords = zarr.load(f'{DATASET_PATH}/np_SST_masks/x_y_coordinates_noland.zarr')    
+
+    # Create full dataset by concatenating datasets for different timesteps
+    full_dataset = torch.utils.data.ConcatDataset([
+        llc4320_dataset(
+            DATASET_PATH,
+            i_mid_timestep,
+            model_hparams["Number_timesteps"],
+            model_hparams["mean_ssh"],
+            model_hparams["std_ssh"],
+            model_hparams["mean_sst"],
+            model_hparams["std_sst"],
+            patch_coords,
+            SST_quality_level=model_hparams["SST_quality_level"], 
+            sst_only=model_hparams["sst_only"], 
+            sst_cloud_mask=model_hparams["sst_cloud_mask"],
+            multiprocessing=model_hparams["multiprocessing"]
+        ) 
+        for i_mid_timestep in range(30, 360, 5)  # Every 5 timesteps from 30 to 360
+    ])
+    print(f"size full_dataset: {len(full_dataset)}")
+    
+    # Split dataset into train/validation/test (70%/20%/10%)
+    train_length = int(0.7 * len(full_dataset))
+    validation_length = int(0.2 * len(full_dataset))
+    test_length = len(full_dataset) - train_length - validation_length
+    train_dataset, validation_dataset, test_dataset = torch.utils.data.random_split(
+        full_dataset, 
+        (train_length, validation_length, test_length))
+    
+    # Print dataset sizes
+    print(f"size train_dataset: {len(train_dataset)}")
+    print(f"size validation_dataset: {len(validation_dataset)}")
+    print(f"size test_dataset: {len(test_dataset)}")
+
+    # Worker initialization function (currently does nothing)
+    def worker_init_fn(worker_id):
+        worker_info = torch.utils.data.get_worker_info()
+    
+    # Create data loaders with parallel loading support
+    train_data_loader = DataLoader(
+        train_dataset,
+        batch_size=model_hparams["batch_size"],
+        shuffle=True,
+        num_workers=n_cpus,
+        worker_init_fn=worker_init_fn,
+        persistent_workers=model_hparams["multiprocessing"])
+    
+    val_data_loader = DataLoader(
+        validation_dataset,
+        batch_size=model_hparams["batch_size"],
+        shuffle=True,
+        num_workers=n_cpus,
+        worker_init_fn=worker_init_fn,
+        persistent_workers=model_hparams["multiprocessing"])
+    
+    test_data_loader = DataLoader(
+        test_dataset,
+        batch_size=model_hparams["batch_size"],
+        shuffle=True,
+        num_workers=n_cpus,
+        worker_init_fn=worker_init_fn,
+        persistent_workers=model_hparams["multiprocessing"])
+    
+    return train_data_loader, val_data_loader, test_data_loader
