@@ -58,6 +58,7 @@ for i in range(torch.cuda.device_count()):
 from importlib import reload
 simvip_model = reload(simvip_model)
 data_loaders = reload(data_loaders)
+trainers = reload(trainers)
 
 
 print(f"Using {torch.get_num_threads()} threads!")
@@ -69,12 +70,12 @@ from lightning_fabric.utilities import optimizer
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-class pl_base_model(pl.LightningModule):
+class pl_base_model(pl.LightningModule, base_model):
 
     def __init__(self, **model_kwargs):
         super().__init__()
         self.save_hyperparameters()
-        self.forward_model = simvip_model.SimVP_Model_no_skip_sst(in_shape=(self.hparams.Number_timesteps,2,128,128),**model_kwargs)
+        self.forward_model = base_model
     
     def forward(self, x):
         """
@@ -127,15 +128,12 @@ class pl_base_model(pl.LightningModule):
         lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100,500], gamma=0.1)
         return {"optimizer":optimizer, "lr_scheduler":lr_scheduler}
 
-    
     def training_step(self, batch, batch_idx):
         loss = self._get_reconstruction_gradient_loss(batch, mode="train")
         return loss
 
-    
     def validation_step(self, batch, batch_idx):
         self._get_reconstruction_gradient_loss(batch, mode="val")
-
     
     def test_step(self, batch, batch_idx):
         self._get_reconstruction_gradient_loss(batch, mode="test")
@@ -216,17 +214,19 @@ test_data_loader  = DataLoader(test_dataset, batch_size=batch_size, shuffle=True
 # Friday Mar 28 9:45AM
 model_hparams = {"training_checkpoint_path": "SimVip_test",
                   "model_name":"SimVip_test",
-                 "Number_timesteps":20,
+                  "Number_timesteps":N_t,
                   "alpha0":1,
                   "alpha1":50,
                   "alpha2":50,
                   "lr":3e-5,
                   "drop":.2,
                   "drop_path":.15,
-                  "multiprocessing":True,
+                  "multiprocessing":multiprocessing,
                 }
 
-model, results = trainer.train_model(pl_base_model,
+model = simvip_model.SimVP_Model_no_skip_sst(in_shape=(N_t,len(infields),128,128),**model_hparams)
+
+model, results = trainers.train_model(pl_base_model(model),
                                      model_hparams["model_name"], 
                                      train_data_loader, 
                                      val_data_loader, 
