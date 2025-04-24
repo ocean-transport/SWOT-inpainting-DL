@@ -23,6 +23,7 @@ import threading
 
 PRINT_LOCK = threading.Lock()
 
+
 class llc4320_dataset(Dataset):
     """
     A PyTorch Dataset for loading and preparing SSH and SST data from llc4320 for pytorch inference.
@@ -163,6 +164,8 @@ class llc4320_dataset(Dataset):
             outvars_loaded = []
             for i, field in enumerate(self.infields):
                 invar = xr.open_zarr(f"{self.data_dir}/{field}/{patch_ID}.zarr").isel(time=slice(int(self.mid_timestep-self.N_t/2), int(self.mid_timestep+self.N_t/2)))
+                # Pull the latitude and longitude, put in output metadata
+                latitude, longitude = invar.latitude.values, invar.longitude.values
                 # Pull the variable associated with the first key, assuming there's only one per .zarr file .
                 # In the future each patch file should contain all of the fields I want
                 invar = invar[list(invar.data_vars.keys())[0]]
@@ -176,6 +179,8 @@ class llc4320_dataset(Dataset):
             outvars_loaded = []
             for i, field in enumerate(self.infields):
                 invar = xr.open_zarr(f"{self.data_dir}/{field}/{patch_ID}.zarr").isel(time=slice(int(self.mid_timestep-self.N_t/2), int(self.mid_timestep+self.N_t/2)))
+                # Pull the latitude and longitude, put in output metadata
+                latitude, longitude = invar.latitude.values, invar.longitude.values
                 # Pull the variable associated with the first key, assuming there's only one per .zarr file .
                 # In the future each patch file should contain all of the fields I want
                 invar = invar[list(invar.data_vars.keys())[0]]
@@ -195,7 +200,11 @@ class llc4320_dataset(Dataset):
         invar = torch.stack(invars_loaded, dim = 1)
         outvar = torch.stack(outvars_loaded, dim = 1)
 
-        metadata = {"patch_ID":patch_ID, "mid_timestep":self.mid_timestep, "patch_coords":self.patch_coords[idx]}
+        metadata = {"patch_ID":patch_ID, 
+                    "mid_timestep":self.mid_timestep, 
+                    "patch_coords":self.patch_coords[idx],
+                    "latitude":latitude,
+                    "longitude":longitude}
         
         return invar, outvar, metadata
 

@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-def train_model(base_model, training_checkpoint_path, train_data_loader, val_data_loader, test_data_loader, **model_hparams):
+def train_model(base_model, device, training_checkpoint_path, train_data_loader, val_data_loader, test_data_loader, **model_hparams):
     
     training_checkpoint_path = os.path.join("./", model_hparams["model_name"])
     
@@ -36,7 +36,7 @@ def train_model(base_model, training_checkpoint_path, train_data_loader, val_dat
     else:
         print("Running from scratch")
         pl.seed_everything(42) # To be reproducable
-        model = base_model(**model_hparams)
+        model = base_model#(**model_hparams)
         trainer.fit(model, train_data_loader, val_data_loader)
         model = base_model.load_from_checkpoint(trainer.checkpoint_callback.best_model_path) # Load best checkpoint after training
 

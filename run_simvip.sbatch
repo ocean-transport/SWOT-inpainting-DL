@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=12:00:00
+#SBATCH --time=1:00:00
 #SBATCH --mem=128GB
 #SBATCH --gres=gpu:rtx8000:1
 #SBATCH --job-name=SIMVIP_gradloss_base
@@ -16,4 +16,4 @@ module purge
 singularity exec --nv \
         --overlay /scratch/tm3076/test_python_env/my_conda.ext3:ro \
         /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
-        /bin/bash -c "source /ext3/env.sh; conda activate swot_python12_pytorch; python -u simvip_grad_loss.py"
+        /bin/bash -c "source /ext3/env.sh; conda activate swot_python12_pytorch; python -u simvip_template.py"
