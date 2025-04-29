@@ -10,6 +10,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 def train_model(base_model, device, training_checkpoint_path, train_data_loader, val_data_loader, test_data_loader, **model_hparams):
     
     training_checkpoint_path = os.path.join("./", model_hparams["model_name"])
+    print("training_checkpoint_path:",training_checkpoint_path)
     
     # Define trainer
     trainer = pl.Trainer(default_root_dir=training_checkpoint_path,

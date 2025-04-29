@@ -6,7 +6,8 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 from glob import glob
-
+import dask
+dask.config.set(scheduler='synchronous')
 
 import sys
 sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
@@ -16,6 +17,7 @@ import interp_utils
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+
 
 
 import traceback
@@ -101,9 +103,9 @@ class llc4320_dataset(Dataset):
         self.L_y = L_y
 
         # Preload SWOT swath templates for masking
-        self.worker_generic_swath0 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p015.zarr").load()
-        self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr").load()
-        
+        self.worker_generic_swath0 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p015.zarr")
+        self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr")
+
     
     def __len__(self):
         # The length of a sample. For now just run through all patches
@@ -120,7 +122,6 @@ class llc4320_dataset(Dataset):
         swot_mask0 = interp_utils.grid_everything(self.worker_generic_swath0, random_center_lat, random_center_lon,  n=self.N, L_x=self.L_x, L_y=self.L_y)*0+1
         swot_mask1 = interp_utils.grid_everything(self.worker_generic_swath1, random_center_lat, random_center_lon,  n=self.N, L_x=self.L_x, L_y=self.L_y)*0+1
         swot_mask = (swot_mask0.ssha.fillna(0) + swot_mask1.ssha.fillna(0)).values>0
-
         return torch.tensor(swot_mask*1)
 
     
@@ -140,7 +141,6 @@ class llc4320_dataset(Dataset):
                           int(self.mid_timestep+int(self.N_t/2))))
         # Apply quality level threshold
         cloud_mask_timeseries_ql = cloud_mask_timeseries.quality_level >= self.SST_quality_level
-        
         return torch.tensor(cloud_mask_timeseries_ql.values*1)
 
 
@@ -195,8 +195,7 @@ class llc4320_dataset(Dataset):
             outvar = outvar[list(outvar.data_vars.keys())[0]]
             outvar_transformed = self.out_transform_list[i](outvar)
             mask = self.get_mask(self.out_mask_list[i], patch_ID)
-            outvars_loaded.append(torch.tensor(outvar_transformed.values)*mask)   
-
+            outvars_loaded.append(torch.tensor(outvar_transformed.values)*mask)
         invar = torch.stack(invars_loaded, dim = 1)
         outvar = torch.stack(outvars_loaded, dim = 1)
 

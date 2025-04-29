@@ -72,13 +72,18 @@ class SimVP_Model_no_skip_sst(nn.Module):
         # Flatten temporal dimension into batch dimension (treat each frame separately initially)
         x = x_raw.view(B * T, C, H, W)
         # Encode the first and second frames separately using different encoders
-        if C == 2:
-            embed1 = self.enc1(x[:, 0, :, :].reshape(B * T, 1, H, W))  # Encode first channel
-            embed2 = self.enc2(x[:, 1, :, :].reshape(B * T, 1, H, W))  # Encode second channel
-            # Concatenate both encoded features along the channel dimension
-            embed = torch.cat((embed1, embed2), dim=1)
-        elif C == 1:
+        encoders = []
+        if C == 1:
             embed = self.enc1(x[:, 0, :, :].reshape(B * T, 1, H, W))  # Encode only the first channel
+        elif C > 1:
+            for c in range(len(C)):
+                embed_c = self.enc1(x[:, c, :, :].reshape(B * T, 1, H, W))  # Encode each channel
+                encoders.append(embed_c)
+            embed = torch.cat(encoders, dim=1)
+        #embed1 = self.enc1(x[:, 0, :, :].reshape(B * T, 1, H, W))  # Encode first channel
+        #embed2 = self.enc2(x[:, 1, :, :].reshape(B * T, 1, H, W))  # Encode second channel
+        ## Concatenate both encoded features along the channel dimension
+        #embed = torch.cat((embed1, embed2), dim=1)
         # Get new shape after encoding
         _, C_, H_, W_ = embed.shape
         # Reshape back into a temporal batch structure
