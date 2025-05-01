@@ -13,7 +13,7 @@ class SimVP_Model_no_skip_sst(nn.Module):
     <https://arxiv.org/abs/2206.05099>`_.
     """
 
-    def __init__(self, in_shape, hid_S=16, hid_T=256, N_S=4, N_T=4, model_type='gSTA',
+    def __init__(self, in_shape, in_channels=2, out_channels=1, hid_S=16, hid_T=256, N_S=4, N_T=4, model_type='gSTA',
                  mlp_ratio=8., drop=0.0, drop_path=0.0, spatio_kernel_enc=3,
                  spatio_kernel_dec=3, act_inplace=True, **kwargs):
         """
@@ -35,7 +35,9 @@ class SimVP_Model_no_skip_sst(nn.Module):
             act_inplace (bool): Whether to perform in-place activation.
         """
         super(SimVP_Model_no_skip_sst, self).__init__()
-        
+        # Define the number of input and output channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         # Extract dimensions from input shape
         T, C, H, W = in_shape  # T is the temporal sequence length
         # Downsample height and width based on spatial layers
@@ -43,10 +45,12 @@ class SimVP_Model_no_skip_sst(nn.Module):
         # Force activation function not to be in-place
         act_inplace = False
         # Define two spatial encoders without skip connections
-        self.enc1 = Encoder_no_skip(1, hid_S, N_S, spatio_kernel_enc, act_inplace=act_inplace)
-        self.enc2 = Encoder_no_skip(1, hid_S, N_S, spatio_kernel_enc, act_inplace=act_inplace)
+        self.encoders = nn.ModuleList([
+                            Encoder_no_skip(1, hid_S, N_S, spatio_kernel_enc, act_inplace=act_inplace)
+                            for _ in range(in_channels)
+                            ])
         # Define decoder that reconstructs the input
-        self.dec = Decoder_no_skip(2 * hid_S, 1, N_S, spatio_kernel_dec, act_inplace=act_inplace)
+        self.dec = Decoder_no_skip(in_channels * hid_S, out_channels, N_S, spatio_kernel_dec, act_inplace=act_inplace)
         # Convert model type to lowercase if provided
         model_type = 'gsta' if model_type is None else model_type.lower()
         # Define the temporal processing module based on model type
@@ -71,14 +75,12 @@ class SimVP_Model_no_skip_sst(nn.Module):
         B, T, C, H, W = x_raw.shape
         # Flatten temporal dimension into batch dimension (treat each frame separately initially)
         x = x_raw.view(B * T, C, H, W)
-        # Encode the first and second frames separately using different encoders
-        if C == 2:
-            embed1 = self.enc1(x[:, 0, :, :].reshape(B * T, 1, H, W))  # Encode first channel
-            embed2 = self.enc2(x[:, 1, :, :].reshape(B * T, 1, H, W))  # Encode second channel
-            # Concatenate both encoded features along the channel dimension
-            embed = torch.cat((embed1, embed2), dim=1)
-        elif C == 1:
-            embed = self.enc1(x[:, 0, :, :].reshape(B * T, 1, H, W))  # Encode only the first channel
+        # Encode the different channels using different encoders
+        embeds = [
+            encoder(x[:, i, :, :].reshape(B * T, 1, H, W))
+            for i, encoder in enumerate(self.encoders)
+            ]
+        embed = torch.cat(embeds, dim=1)
         # Get new shape after encoding
         _, C_, H_, W_ = embed.shape
         # Reshape back into a temporal batch structure
@@ -90,7 +92,7 @@ class SimVP_Model_no_skip_sst(nn.Module):
         # Decode to reconstruct the output
         Y = self.dec(hid)
         # Reshape output back to (B, T, 1, H, W)
-        Y = Y.reshape(B, T, 1, H, W)
+        Y = Y.reshape(B, T, self.out_channels, H, W)
         
         return Y
         
@@ -258,7 +260,7 @@ class MidIncepNet(nn.Module):
         return y
 
 
-
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 class MetaBlock(nn.Module):
     """The hidden Translator of MetaFormer for SimVP"""
 
@@ -320,8 +322,7 @@ class MetaBlock(nn.Module):
         return z if self.in_channels == self.out_channels else self.reduction(z)
 
 
-    
-    
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  
 class MidMetaNet(nn.Module):
     """The hidden Translator of MetaFormer for SimVP"""
 

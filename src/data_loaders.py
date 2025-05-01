@@ -187,7 +187,7 @@ class llc4320_dataset(Dataset):
                 invar_transformed = self.in_transform_list[i](invar)
                 mask = self.get_mask(self.in_mask_list[i], patch_ID)
                 invars_loaded.append(torch.tensor(invar_transformed.values)*mask)
-        # By the time you get here the patch_ID should be ok
+        # By the time you get here the patch_ID should be set to "065" in the event of an error
         for i, field in enumerate(self.outfields):
             outvar = xr.open_zarr(f"{self.data_dir}/{field}/{patch_ID}.zarr").isel(time=slice(int(self.mid_timestep-self.N_t/2), int(self.mid_timestep+self.N_t/2)))
             # Pull the variable associated with the first key, assuming there's only one per .zarr file .

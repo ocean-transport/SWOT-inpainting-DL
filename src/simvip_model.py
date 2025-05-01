@@ -292,7 +292,7 @@ class MetaBlock(nn.Module):
         elif model_type == 'swin':
             self.block = SwinSubBlock(
                 in_channels, input_resolution, layer_i=layer_i, mlp_ratio=mlp_ratio,
-                drop=drop, drop_path=drop_path)
+                drop_path=drop_path)
         elif model_type == 'uniformer':
             block_type = 'MHSA' if in_channels == out_channels and layer_i > 0 else 'Conv'
             self.block = UniformerSubBlock(

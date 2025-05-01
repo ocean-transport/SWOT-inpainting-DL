@@ -499,7 +499,8 @@ class SwinSubBlock(SwinTransformerBlock):
         shift_size = 0 if (layer_i % 2 == 0) else window_size // 2
         super().__init__(dim, input_resolution, num_heads=8, window_size=window_size,
                          shift_size=shift_size, mlp_ratio=mlp_ratio,
-                         drop_path=drop_path, drop=drop, qkv_bias=True)
+                         drop_path=drop_path, #drop=drop, 
+                         qkv_bias=True)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
