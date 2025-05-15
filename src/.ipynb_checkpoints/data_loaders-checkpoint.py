@@ -58,7 +58,7 @@ class llc4320_dataset(Dataset):
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
                  N=128,L_x=512e3,L_y=512e3,
-                 multiprocessing=False, device=None):
+                 multiprocessing=False, device=None,return_masks=False):
         """
         Initialize the dataset with paths, normalization parameters, and processing flags.
         
@@ -74,6 +74,7 @@ class llc4320_dataset(Dataset):
             sst_cloud_mask (bool): If True, apply cloud masking to SST
             multiprocessing (bool): Enable multiprocessing support
             device (str): Device to load data onto (e.g., 'cuda')
+            return_masks (bool) : Return cloud / SWOT masks, default=False
         """
         # Set device to interface with GPU
         # Device configuration (GPU/CPU)
@@ -93,7 +94,7 @@ class llc4320_dataset(Dataset):
         self.out_mask_list = out_mask_list # ["cloud mask", "SWOT mask", None,]
         self.in_transform_list = in_transform_list # [lamda x: (x - mean_ssh)/std_ssh, ...]
         self.out_transform_list = out_transform_list # [lamda x: (x - mean_ssh)/std_ssh, ...]
-
+        
         # Cloud masking flags
         self.SST_quality_level = SST_quality_level
 
@@ -106,6 +107,7 @@ class llc4320_dataset(Dataset):
         self.worker_generic_swath0 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p015.zarr")
         self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr")
 
+        self.return_masks = return_masks
     
     def __len__(self):
         # The length of a sample. For now just run through all patches
@@ -187,7 +189,7 @@ class llc4320_dataset(Dataset):
                 invar_transformed = self.in_transform_list[i](invar)
                 mask = self.get_mask(self.in_mask_list[i], patch_ID)
                 invars_loaded.append(torch.tensor(invar_transformed.values)*mask)
-        # By the time you get here the patch_ID should be ok
+        # By the time you get here the patch_ID should be set to "065" in the event of an error
         for i, field in enumerate(self.outfields):
             outvar = xr.open_zarr(f"{self.data_dir}/{field}/{patch_ID}.zarr").isel(time=slice(int(self.mid_timestep-self.N_t/2), int(self.mid_timestep+self.N_t/2)))
             # Pull the variable associated with the first key, assuming there's only one per .zarr file .
@@ -196,14 +198,17 @@ class llc4320_dataset(Dataset):
             outvar_transformed = self.out_transform_list[i](outvar)
             mask = self.get_mask(self.out_mask_list[i], patch_ID)
             outvars_loaded.append(torch.tensor(outvar_transformed.values)*mask)
-        invar = torch.stack(invars_loaded, dim = 1)
-        outvar = torch.stack(outvars_loaded, dim = 1)
+        invar = torch.nan_to_num(torch.stack(invars_loaded, dim = 1))
+        outvar = torch.nan_to_num(torch.stack(outvars_loaded, dim = 1))
 
         metadata = {"patch_ID":patch_ID, 
                     "mid_timestep":self.mid_timestep, 
                     "patch_coords":self.patch_coords[idx],
                     "latitude":latitude,
                     "longitude":longitude}
+        if self.return_masks:
+            metadata["out_masks"] = [self.get_mask(self.out_mask_list[i], patch_ID) for i in range(len(self.out_mask_list))]
+            metadata["in_masks"] = [self.get_mask(self.in_mask_list[i], patch_ID) for i in range(len(self.in_mask_list))]
         
         return invar, outvar, metadata
 
