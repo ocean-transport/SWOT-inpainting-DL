@@ -172,6 +172,25 @@ class llc4320_dataset(Dataset):
             mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
         return torch.tensor(mask.astype(np.float32))
 
+    def get_nadir_altimeter_mask(self, version="random"):
+        # Helper function to generate a SWOT-like mask
+        sw_corner = [-152.5, 30.0]
+        ne_corner = [-149.5, 42.0]
+        lon = np.random.randint(sw_corner[0], ne_corner[0])
+        lat = np.random.randint(sw_corner[1], ne_corner[1])
+        if version == "random":
+            nrand = np.random.randint(2)
+            if nrand == 0:
+                m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            else:
+                m0 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            mask = (m0.ssha.fillna(0)).values > 0
+        elif version == "both":
+            m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            m1 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
+        return torch.tensor(mask.astype(np.float32))
+    
     def get_cloud_mask_timeseries(self, patch_ID):
         path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{patch_ID}.nc"
         cm = xr.open_dataset(path).sst_filtered_q5
