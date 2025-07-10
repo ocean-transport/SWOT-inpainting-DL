@@ -9,8 +9,12 @@ from glob import glob
 import dask
 dask.config.set(scheduler='synchronous')
 
+
 import sys
-sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src')
+if os.path.exists('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src'):
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src')
+else: 
+    sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
 import interp_utils
 
 import torch
@@ -23,6 +27,7 @@ PRINT_LOCK = threading.Lock()
 
 from functools import partial
 
+
 def standardize(x, mean=None, std=1.0):
     if mean is not None:
         x = x - mean
@@ -34,15 +39,14 @@ def standardize_samplewise(x, std=1.0):
 def no_transform(x):
     return x
 
-
-
 class llc4320_dataset(Dataset):
     def __init__(self, data_dir, mid_timestep, N_t, patch_coords, 
                  infields, outfields, in_mask_list, out_mask_list, 
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
                  N=128, L_x=512e3, L_y=512e3, flatten=False, return_meta_data=True,
-                 standards=None, multiprocessing=False, device=None, cloud_rho=.7):
+                 standards=None, multiprocessing=False, device=None, cloud_rho=.7,
+                 return_masks=False):
 
         self.device = device
         self.data_dir = data_dir
@@ -62,6 +66,7 @@ class llc4320_dataset(Dataset):
         self.flatten = flatten
         self.return_meta_data = return_meta_data
         self.cloud_rho = cloud_rho
+        self.return_masks = return_masks
 
         # Standards: tuple or dict
         if standards is None:
@@ -91,7 +96,7 @@ class llc4320_dataset(Dataset):
         self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr")
 
         # Preload cloud masks
-        self.cloud_catalog = xr.open_zarr(f"{self.data_dir}/HRS_SST_tiles/agg_cloud_percentages/catalog.zarr").compute()
+        self.cloud_catalog = xr.open_zarr(f"{self.data_dir}/catalog.zarr").compute()
 
     def __len__(self):
         return self.patch_coords.shape[0]
@@ -109,8 +114,8 @@ class llc4320_dataset(Dataset):
             coords = self.patch_coords[idx]
         else:
             coords = None
-        invars = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
-        outvars = self._load_patch_fields(patch_id, self.outfields, self.out_transform_list, self.out_mask_list)
+        invars, in_masks = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
+        outvars, out_masks = self._load_patch_fields(patch_id, self.outfields, self.out_transform_list, self.out_mask_list)
         invar = torch.stack(invars, dim=1)
         outvar = torch.stack(outvars, dim=1)
         if self.flatten:
@@ -125,10 +130,13 @@ class llc4320_dataset(Dataset):
                 "longitude": self.longitude
             }
             return invar, outvar, metadata
+        elif self.return_masks:
+            invar, outvar, [in_masks, out_masks]
         return invar, outvar
 
     def _load_patch_fields(self, patch_id, fields, transform_keys, mask_keys):
         variables = []
+        masks = []
         for i, field in enumerate(fields):
             ds = xr.open_zarr(f"{self.data_dir}/{field}/{patch_id}.zarr").isel(
                 time=slice(int(self.mid_timestep - self.N_t / 2), int(self.mid_timestep + self.N_t / 2))
@@ -139,13 +147,21 @@ class llc4320_dataset(Dataset):
             var = self.transforms[transform_keys[i]](var)
             mask = self.get_mask(mask_keys[i], patch_id)
             variables.append(torch.tensor(var.values) * mask)
-        return variables
+            masks.append(masks)
+        return variables, masks
 
     def get_mask(self, mask_key, patch_ID):
         if (mask_key is None) or ("None" in mask_key):
             return 1
         elif "swot" in str(mask_key).lower():
-            return self.get_random_swot_mask()
+            sampling="all"
+            if "central" in str(mask_key).lower():
+                sampling="central"
+            if "random" in str(mask_key).lower():
+                sampling="random"
+            return self.get_random_swot_mask(sampling=sampling)
+        elif "nadir" in str(mask_key).lower():
+            return self.get_nadir_altimeter_mask(patch_ID)
         elif "cloud_tseries" in str(mask_key).lower():
             return self.get_cloud_mask_timeseries(patch_ID)
         elif "cloud_rho" in str(mask_key).lower():
@@ -153,10 +169,10 @@ class llc4320_dataset(Dataset):
         else:
             raise ValueError(f"Unknown mask type: {mask_key}")
 
-    def get_random_swot_mask(self, version="random"):
+    def get_random_swot_mask(self, version="random", sampling="all"):
         # Helper function to generate a SWOT-like mask
-        sw_corner = [-152.5, 30.0]
-        ne_corner = [-149.5, 42.0]
+        sw_corner = [-152.8, 30.3]
+        ne_corner = [-149.8, 42.3]
         lon = np.random.randint(sw_corner[0], ne_corner[0])
         lat = np.random.randint(sw_corner[1], ne_corner[1])
         if version == "random":
@@ -170,42 +186,47 @@ class llc4320_dataset(Dataset):
             m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
             m1 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
             mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
-        return torch.tensor(mask.astype(np.float32))
+        mask = torch.tensor(mask)
+        if sampling=="all":
+            return torch.tensor(mask.astype(np.float32))
+        elif sampling=="central":
+            mask_N_t = torch.zeros([self.N_t]+list(mask.size()))
+            mask_N_t[int(self.N_t/2),:,:] = mask
+            return torch.tensor(mask_N_t)
+        elif sampling=="random":
+            mask_N_t = torch.zeros([self.N_t]+list(mask.size()))
+            mask_N_t[np.random.nandint(self.N_t),:,:] = mask
+            return torch.tensor(mask_N_t)
 
-    def get_nadir_altimeter_mask(self, version="random"):
-        # Helper function to generate a SWOT-like mask
-        sw_corner = [-152.5, 30.0]
-        ne_corner = [-149.5, 42.0]
-        lon = np.random.randint(sw_corner[0], ne_corner[0])
-        lat = np.random.randint(sw_corner[1], ne_corner[1])
+    def get_nadir_altimeter_mask(self, patch_ID, version="random", sample_time="1D"):
         if version == "random":
-            nrand = np.random.randint(2)
-            if nrand == 0:
-                m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            else:
-                m0 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            mask = (m0.ssha.fillna(0)).values > 0
-        elif version == "both":
-            m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            m1 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
-        return torch.tensor(mask.astype(np.float32))
+            try:
+                random_tile = xr.open_zarr(f"{self.data_dir}/{np.random.randint(422):03}.zarr").sla_filtered
+            except:
+                 random_tile = xr.open_zarr(f"{self.data_dir}/copernicus_nadir_SSH/002.zarr").sla_filtered
+            random_tile = random_tile.resample(time=sample_time).mean()
+            mid = np.random.randint(int(self.N_t / 2), len(random_tile.time) - int(self.N_t / 2))
+            nadir_mask = random_tile.isel(time=slice(mid - self.N_t//2, mid + self.N_t//2 + self.N_t%2))
+            nadir_mask = (nadir_mask * 0 + 1).where(nadir_mask > 0, other=0)
+        return torch.tensor(nadir_mask.values)
     
     def get_cloud_mask_timeseries(self, patch_ID):
         path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{patch_ID}.nc"
-        cm = xr.open_dataset(path).sst_filtered_q5
-        mid = np.random.randint(int(self.N_t / 2), len(cm.time) - int(self.N_t / 2))
-        cm = cm.isel(time=slice(mid - self.N_t // 2, mid + self.N_t // 2))
-        cm = (cm * 0 + 1).where(cm > 0, other=0)
-        return torch.tensor(cm.values)
+        cmask = xr.open_dataset(path).sst_filtered_q5
+        mid = np.random.randint(int(self.N_t / 2), len(cmask.time) - int(self.N_t / 2))
+        cmask = cmask.isel(time=slice(mid - self.N_t // 2, mid + self.N_t // 2))
+        cmask = (cmask * 0 + 1).where(cmask > 0, other=0)
+        return torch.tensor(cmask.values)
 
     def get_cloud_mask_rho(self):
         cloud_catalog_rho = self.cloud_catalog.where(self.cloud_catalog.rho>=self.cloud_rho,drop=True)
-        sample_N = cloud_catalog_rho.isel(i_time = np.random.randint(len(cloud_catalog_rho.i_time)))
-        sample_N_tstep = int(sample_N.patch_timestep)
-        sample_N_patch_ID = str(int(sample_N.patch_id)).zfill(3)
-        path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{sample_N_patch_ID}.nc"
-        cm = ~np.isnan(xr.open_dataset(path).isel(time=sample_N_tstep).sst_filtered_q5)
-        return torch.tensor(cm.values)
+        masks = []
+        for t in range(self.N_t):
+            sample_N = cloud_catalog_rho.isel(i_time = np.random.randint(len(cloud_catalog_rho.i_time)))
+            sample_N_tstep = int(sample_N.patch_timestep)
+            sample_N_patch_ID = str(int(sample_N.patch_id)).zfill(3)
+            path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{sample_N_patch_ID}.nc"
+            masks.append(~np.isnan(xr.open_dataset(path).isel(time=sample_N_tstep).sst_filtered_q5))
+        return torch.tensor(np.stack(masks,axis=0))
 
 
