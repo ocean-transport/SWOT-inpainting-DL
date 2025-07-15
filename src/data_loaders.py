@@ -44,7 +44,7 @@ class llc4320_dataset(Dataset):
                  infields, outfields, in_mask_list, out_mask_list, 
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
-                 N=128, L_x=512e3, L_y=512e3, flatten=False, return_meta_data=False,
+                 N=128, L_x=512e3, L_y=512e3, flatten=False, return_metadata=False,
                  standards=None, multiprocessing=False, device=None, cloud_rho=.7,
                  return_masks=False):
 
@@ -64,7 +64,7 @@ class llc4320_dataset(Dataset):
         self.L_x = L_x
         self.L_y = L_y
         self.flatten = flatten
-        self.return_meta_data = return_meta_data
+        self.return_meta_data = return_metadata
         self.cloud_rho = cloud_rho
         self.return_masks = return_masks
 
@@ -88,6 +88,7 @@ class llc4320_dataset(Dataset):
             "std_mean_sst_norm": partial(standardize_samplewise, std=std_sst),
             "std_global_mean_ssh_norm": partial(standardize, mean=mean_ssh, std=std_ssh),
             "std_global_mean_sst_norm": partial(standardize, mean=mean_sst, std=std_sst),
+            "std_global_dailyclimatology_mean_sst_norm": partial(standardize, mean=mean_sst, std=std_sst),
             "no_transform": no_transform,
         }
 
@@ -127,8 +128,9 @@ class llc4320_dataset(Dataset):
         if self.return_meta_data:
             metadata = {
                 "patch_ID": patch_id,
-                "mid_timestep": self.mid_timestep,
                 "patch_coords": coords,
+                "mid_timestep_idx": self.mid_timestep,
+                "time": self.time,
                 "latitude": self.latitude,
                 "longitude": self.longitude
             }
@@ -145,6 +147,8 @@ class llc4320_dataset(Dataset):
             ds = xr.open_zarr(f"{self.data_dir}/{field}/{patch_id}.zarr").isel(
                 time=slice(int(self.mid_timestep - self.N_t / 2), int(self.mid_timestep + self.N_t / 2))
             )
+            # Save some metadata
+            self.time = ds.time.values
             self.latitude = ds.latitude.values
             self.longitude = ds.longitude.values
             var = ds[list(ds.data_vars.keys())[0]]
