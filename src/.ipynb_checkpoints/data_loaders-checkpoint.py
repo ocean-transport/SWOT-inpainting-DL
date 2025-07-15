@@ -44,7 +44,7 @@ class llc4320_dataset(Dataset):
                  infields, outfields, in_mask_list, out_mask_list, 
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
-                 N=128, L_x=512e3, L_y=512e3, flatten=False, return_meta_data=True,
+                 N=128, L_x=512e3, L_y=512e3, flatten=False, return_meta_data=False,
                  standards=None, multiprocessing=False, device=None, cloud_rho=.7,
                  return_masks=False):
 
@@ -115,9 +115,12 @@ class llc4320_dataset(Dataset):
         else:
             coords = None
         invars, in_masks = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
-        outvars, out_masks = self._load_patch_fields(patch_id, self.outfields, self.out_transform_list, self.out_mask_list)
         invar = torch.stack(invars, dim=1)
-        outvar = torch.stack(outvars, dim=1)
+        if len(self.outfields)>0: # Handle cases where you don't want any outfields
+            outvars, out_masks = self._load_patch_fields(patch_id, self.outfields, self.out_transform_list, self.out_mask_list)
+            outvar = torch.stack(outvars, dim=1)
+        else: 
+            outvar, out_masks = torch.tensor([[0]]), torch.tensor([[0]])
         if self.flatten:
             invar = invar.flatten(0, 1)
             outvar = outvar.flatten(0, 1)
@@ -131,8 +134,9 @@ class llc4320_dataset(Dataset):
             }
             return invar, outvar, metadata
         elif self.return_masks:
-            invar, outvar, [in_masks, out_masks]
-        return invar, outvar
+            return invar, outvar, torch.tensor([in_masks, out_masks])
+        else:
+            return invar, outvar
 
     def _load_patch_fields(self, patch_id, fields, transform_keys, mask_keys):
         variables = []
