@@ -44,8 +44,8 @@ class llc4320_dataset(Dataset):
                  infields, outfields, in_mask_list, out_mask_list, 
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
-                 N=128, L_x=512e3, L_y=512e3, flatten=False, return_metadata=False,
-                 standards=None, multiprocessing=False, device=None, cloud_rho=.7,
+                 N=128, L_x=512e3, L_y=512e3, return_metadata=False,
+                 standards=None, squeeze=False, multiprocessing=False, device=None, cloud_rho=.7,
                  return_masks=False):
 
         self.device = device
@@ -63,7 +63,7 @@ class llc4320_dataset(Dataset):
         self.N = N
         self.L_x = L_x
         self.L_y = L_y
-        self.flatten = flatten
+        self.squeeze = squeeze
         self.return_meta_data = return_metadata
         self.cloud_rho = cloud_rho
         self.return_masks = return_masks
@@ -95,8 +95,7 @@ class llc4320_dataset(Dataset):
         # Preload SWOT swaths
         self.worker_generic_swath0 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p015.zarr")
         self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr")
-
-        # Preload cloud masks
+        # Preload cloud mask catalog
         self.cloud_catalog = xr.open_zarr(f"{self.data_dir}/catalog.zarr").compute()
 
     def __len__(self):
@@ -116,15 +115,20 @@ class llc4320_dataset(Dataset):
         else:
             coords = None
         invars, in_masks = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
-        invar = torch.stack(invars, dim=1)
-        if len(self.outfields)>0: # Handle cases where you don't want any outfields
-            outvars, out_masks = self._load_patch_fields(patch_id, self.outfields, self.out_transform_list, self.out_mask_list)
-            outvar = torch.stack(outvars, dim=1)
-        else: 
+        invar = torch.nan_to_num(torch.stack(invars, dim=1), nan=0)
+        in_masks = torch.nan_to_num(torch.stack(in_masks, dim=1),nan=0)
+        outfields_specified = (self.outfields not in (None, [], "none") and isinstance(self.outfields, (list, tuple)))
+        if outfields_specified:
+            out_vars, out_masks = self._load_patch_fields(patch_id, self.outfields,self.out_transform_list, self.out_mask_list)
+            outvar = torch.nan_to_num(torch.stack(out_vars, dim=1), nan=0)
+            out_masks = torch.nan_to_num(torch.stack(out_masks, dim=1),nan=0)
+        else:
             outvar, out_masks = torch.tensor([[0]]), torch.tensor([[0]])
-        if self.flatten:
-            invar = invar.flatten(0, 1)
-            outvar = outvar.flatten(0, 1)
+        if self.squeeze:
+            invar = invar.squeeze()
+            outvar = outvar.squeeze()
+            in_masks = in_masks.squeeze()
+            out_masks = out_masks.squeeze()
         if self.return_meta_data:
             metadata = {
                 "patch_ID": patch_id,
@@ -136,9 +140,9 @@ class llc4320_dataset(Dataset):
             }
             return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0), metadata
         elif self.return_masks:
-            return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0), torch.nan_to_num(torch.tensor([in_masks, out_masks]),nan=0)
+            return invar, outvar, in_masks, out_masks
         else:
-            return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0)
+            return invar, outvar
 
     def _load_patch_fields(self, patch_id, fields, transform_keys, mask_keys):
         variables = []
@@ -155,7 +159,7 @@ class llc4320_dataset(Dataset):
             var = self.transforms[transform_keys[i]](var)
             mask = self.get_mask(mask_keys[i], patch_id)
             variables.append(torch.tensor(var.values) * mask)
-            masks.append(masks)
+            masks.append(torch.broadcast_to(mask, var.shape))
         return variables, masks
 
     def get_mask(self, mask_key, patch_ID):
@@ -203,7 +207,7 @@ class llc4320_dataset(Dataset):
             return torch.tensor(mask_N_t)
         elif sampling=="random":
             mask_N_t = torch.zeros([self.N_t]+list(mask.size()))
-            mask_N_t[np.random.nandint(self.N_t),:,:] = mask
+            mask_N_t[np.random.randint(self.N_t),:,:] = mask
             return torch.tensor(mask_N_t)
 
     def get_nadir_altimeter_mask(self, patch_ID, version="random", sample_time="1D"):
