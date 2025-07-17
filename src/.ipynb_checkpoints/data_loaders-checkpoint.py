@@ -134,11 +134,11 @@ class llc4320_dataset(Dataset):
                 "latitude": self.latitude,
                 "longitude": self.longitude
             }
-            return invar, outvar, metadata
+            return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0), metadata
         elif self.return_masks:
-            return invar, outvar, torch.tensor([in_masks, out_masks])
+            return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0), torch.nan_to_num(torch.tensor([in_masks, out_masks]),nan=0)
         else:
-            return invar, outvar
+            return torch.nan_to_num(invar,nan=0), torch.nan_to_num(outvar,nan=0)
 
     def _load_patch_fields(self, patch_id, fields, transform_keys, mask_keys):
         variables = []
@@ -179,10 +179,10 @@ class llc4320_dataset(Dataset):
 
     def get_random_swot_mask(self, version="random", sampling="all"):
         # Helper function to generate a SWOT-like mask
-        sw_corner = [-152.8, 30.3]
-        ne_corner = [-149.8, 42.3]
-        lon = np.random.randint(sw_corner[0], ne_corner[0])
-        lat = np.random.randint(sw_corner[1], ne_corner[1])
+        sw_corner = [-154.0, 30.3]
+        ne_corner = [-148.5, 42.3]
+        lon = np.random.uniform(sw_corner[0], ne_corner[0])
+        lat = np.random.uniform(sw_corner[1], ne_corner[1])
         if version == "random":
             nrand = np.random.randint(2)
             if nrand == 0:
@@ -196,7 +196,7 @@ class llc4320_dataset(Dataset):
             mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
         mask = torch.tensor(mask)
         if sampling=="all":
-            return torch.tensor(mask.astype(np.float32))
+            return torch.tensor(mask)
         elif sampling=="central":
             mask_N_t = torch.zeros([self.N_t]+list(mask.size()))
             mask_N_t[int(self.N_t/2),:,:] = mask
