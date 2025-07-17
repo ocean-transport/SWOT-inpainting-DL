@@ -117,7 +117,7 @@ class llc4320_dataset(Dataset):
         invars, in_masks = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
         invar = torch.nan_to_num(torch.stack(invars, dim=1), nan=0)
         in_masks = torch.nan_to_num(torch.stack(in_masks, dim=1),nan=0)
-        outfields_specified = (self.outfields not in (None, [], "none") and isinstance(self.outfields, (list, tuple)))
+        outfields_specified = (self.outfields not in (None, [], "none"))
         if outfields_specified:
             out_vars, out_masks = self._load_patch_fields(patch_id, self.outfields,self.out_transform_list, self.out_mask_list)
             outvar = torch.nan_to_num(torch.stack(out_vars, dim=1), nan=0)
@@ -164,14 +164,20 @@ class llc4320_dataset(Dataset):
 
     def get_mask(self, mask_key, patch_ID):
         if (mask_key is None) or ("None" in mask_key):
-            return 1
+            return torch.tensor([1])
         elif "swot" in str(mask_key).lower():
             sampling="all"
+            version="random"
+            if "calval" in str(mask_key).lower():
+                version="calval"
             if "central" in str(mask_key).lower():
                 sampling="central"
             if "random" in str(mask_key).lower():
                 sampling="random"
-            return self.get_random_swot_mask(sampling=sampling)
+            if "nadir" in str(mask_key).lower():
+                return (self.get_random_swot_mask(sampling=sampling,version=version) + self.get_nadir_altimeter_mask(patch_ID)) > 0
+            else:
+                return self.get_random_swot_mask(sampling=sampling,version=version)
         elif "nadir" in str(mask_key).lower():
             return self.get_nadir_altimeter_mask(patch_ID)
         elif "cloud_tseries" in str(mask_key).lower():
@@ -194,10 +200,18 @@ class llc4320_dataset(Dataset):
             else:
                 m0 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
             mask = (m0.ssha.fillna(0)).values > 0
-        elif version == "both":
-            m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            m1 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            mask = (m0.ssha.fillna(0) + m1.ssha.fillna(0)).values > 0
+        elif version == "calval":
+            ms = [interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y),
+                  interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+                 ]
+            a0 = np.random.randint(2)
+            a1 = int((a0-1)**2)
+            calval_mask = torch.stack([torch.tensor(ms[a0].ssha.fillna(0).values > 0), torch.tensor(ms[a1].ssha.fillna(0).values > 0)])
+            if self.N_t > 1:
+                mask_broadcast = torch.broadcast_to(calval_mask,(self.N_t//2+self.N_t%2,2,128,128))
+                mask = mask_broadcast.reshape(self.N_t+self.N_t%2,128,128)[:self.N_t]
+            else:
+                mask = calval_mask[0]
         mask = torch.tensor(mask)
         if sampling=="all":
             return torch.tensor(mask)
