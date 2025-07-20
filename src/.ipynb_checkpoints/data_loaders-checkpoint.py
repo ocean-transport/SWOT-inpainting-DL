@@ -8,6 +8,8 @@ import os
 from glob import glob
 import dask
 dask.config.set(scheduler='synchronous')
+import time
+
 
 
 import sys
@@ -46,7 +48,7 @@ class llc4320_dataset(Dataset):
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
                  N=128, L_x=512e3, L_y=512e3, return_metadata=False,
                  standards=None, squeeze=False, multiprocessing=False, device=None, cloud_rho=.7,
-                 return_masks=False):
+                 return_masks=False, time_loading=False):
 
         self.device = device
         self.data_dir = data_dir
@@ -67,6 +69,7 @@ class llc4320_dataset(Dataset):
         self.return_meta_data = return_metadata
         self.cloud_rho = cloud_rho
         self.return_masks = return_masks
+        self.time_loading = time_loading
 
         # Standards: tuple or dict
         if standards is None:
@@ -97,16 +100,22 @@ class llc4320_dataset(Dataset):
         self.worker_generic_swath1 = xr.open_zarr(f"{self.data_dir}/SWOT_swaths_488/hawaii_c488_p028.zarr")
         # Preload cloud mask catalog
         self.cloud_catalog = xr.open_zarr(f"{self.data_dir}/catalog.zarr").compute()
-
+        self.cloud_catalog_rho = self.cloud_catalog.where(self.cloud_catalog.rho>=self.cloud_rho,drop=True)
     def __len__(self):
         return self.patch_coords.shape[0]
 
     def __getitem__(self, idx):
+        ########################
+        self.t0 = time.perf_counter()
         try:
-            return self._load_patch(idx)
+            result = self._load_patch(idx)
         except Exception as e:
             print(f"[Warning] Failed to load patch {idx}: {e} — falling back to patch 065")
-            return self._load_patch(patch_id="065")
+            result = self._load_patch(patch_id="065")
+        ########################
+        if self.time_loading:
+            print(f"[Timer] Total __getitem__ duration: {time.perf_counter() - self.t0:.3f} sec")
+        return result
 
     def _load_patch(self, idx=None, patch_id=None):
         if patch_id is None:
@@ -114,14 +123,22 @@ class llc4320_dataset(Dataset):
             coords = self.patch_coords[idx]
         else:
             coords = None
+        self.t1 = time.perf_counter()
         invars, in_masks = self._load_patch_fields(patch_id, self.infields, self.in_transform_list, self.in_mask_list)
         invar = torch.nan_to_num(torch.stack(invars, dim=1), nan=0)
         in_masks = torch.nan_to_num(torch.stack(in_masks, dim=1),nan=0)
+        ########################
+        if self.time_loading:
+            print(f"[Timer] Input vars + masks loaded in {time.perf_counter() - self.t1:.3f} sec")
         outfields_specified = (self.outfields not in (None, [], "none"))
         if outfields_specified:
+            self.t2 = time.perf_counter()
             out_vars, out_masks = self._load_patch_fields(patch_id, self.outfields,self.out_transform_list, self.out_mask_list)
             outvar = torch.nan_to_num(torch.stack(out_vars, dim=1), nan=0)
             out_masks = torch.nan_to_num(torch.stack(out_masks, dim=1),nan=0)
+            ########################
+            if self.time_loading:
+                print(f"[Timer] Output vars + masks loaded in {time.perf_counter() - self.t2:.3f} sec")
         else:
             outvar, out_masks = torch.tensor([[0]]), torch.tensor([[0]])
         if self.squeeze:
@@ -129,6 +146,9 @@ class llc4320_dataset(Dataset):
             outvar = outvar.squeeze()
             in_masks = in_masks.squeeze()
             out_masks = out_masks.squeeze()
+            ########################
+            if self.time_loading:
+                print(f"[Timer] Total _load_patch duration: {time.perf_counter() - self.t0:.3f} sec")
         if self.return_meta_data:
             metadata = {
                 "patch_ID": patch_id,
@@ -158,6 +178,8 @@ class llc4320_dataset(Dataset):
             var = ds[list(ds.data_vars.keys())[0]]
             var = self.transforms[transform_keys[i]](var)
             mask = self.get_mask(mask_keys[i], patch_id)
+            if self.time_loading:
+                print(f"[Timer] Field '{field}' loaded and mask '{mask_keys[i]}' applied in {time.perf_counter() - self.t0:.3f} sec")
             variables.append(torch.tensor(var.values) * mask)
             masks.append(torch.broadcast_to(mask, var.shape))
         return variables, masks
@@ -175,38 +197,42 @@ class llc4320_dataset(Dataset):
             if "random" in str(mask_key).lower():
                 sampling="random"
             if "nadir" in str(mask_key).lower():
-                return (self.get_random_swot_mask(sampling=sampling,version=version) + self.get_nadir_altimeter_mask(patch_ID)) > 0
+                result = (self.get_random_swot_mask(sampling=sampling,version=version) + self.get_nadir_altimeter_mask(patch_ID)) > 0
             else:
-                return self.get_random_swot_mask(sampling=sampling,version=version)
+                result = self.get_random_swot_mask(sampling=sampling,version=version)
         elif "nadir" in str(mask_key).lower():
-            return self.get_nadir_altimeter_mask(patch_ID)
+            result = self.get_nadir_altimeter_mask(patch_ID)
         elif "cloud_tseries" in str(mask_key).lower():
-            return self.get_cloud_mask_timeseries(patch_ID)
+            result = self.get_cloud_mask_timeseries(patch_ID)
         elif "cloud_rho" in str(mask_key).lower():
-            return self.get_cloud_mask_rho()
+            result = self.get_cloud_mask_rho()
         else:
             raise ValueError(f"Unknown mask type: {mask_key}")
+        if self.time_loading:
+            print(f"[Timer] Mask '{mask_key}' generated in {time.perf_counter() - self.t0:.3f} sec")
+        return result
 
     def get_random_swot_mask(self, version="random", sampling="all"):
         # Helper function to generate a SWOT-like mask
-        sw_corner = [-154.0, 30.3]
-        ne_corner = [-148.5, 42.3]
+        sw_corner = [-154.5, 35.3]
+        ne_corner = [-147.5, 42.3]
+        lat_max, lat_min, l_step, lon_i = 9000, 2000, 4, np.random.randint(5)
         lon = np.random.uniform(sw_corner[0], ne_corner[0])
         lat = np.random.uniform(sw_corner[1], ne_corner[1])
         if version == "random":
             nrand = np.random.randint(2)
             if nrand == 0:
-                m0 = interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+                m0 = interp_utils.grid_everything(self.worker_generic_swath0.ssha[lat_min:lat_max:l_step,lon_i::l_step], lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
             else:
-                m0 = interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
-            mask = (m0.ssha.fillna(0)).values > 0
+                m0 = interp_utils.grid_everything(self.worker_generic_swath1.ssha[lat_min:lat_max:l_step,lon_i::l_step], lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            mask = (m0.fillna(0)).values > 0
         elif version == "calval":
-            ms = [interp_utils.grid_everything(self.worker_generic_swath0, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y),
-                  interp_utils.grid_everything(self.worker_generic_swath1, lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
+            ms = [interp_utils.grid_everything(self.worker_generic_swath0.ssha[lat_min:lat_max:l_step,lon_i::l_step], lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y),
+                  interp_utils.grid_everything(self.worker_generic_swath1.ssha[lat_min:lat_max:l_step,lon_i::l_step], lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y)
                  ]
             a0 = np.random.randint(2)
             a1 = int((a0-1)**2)
-            calval_mask = torch.stack([torch.tensor(ms[a0].ssha.fillna(0).values > 0), torch.tensor(ms[a1].ssha.fillna(0).values > 0)])
+            calval_mask = torch.stack([torch.tensor(ms[a0].fillna(0).values > 0), torch.tensor(ms[a1].fillna(0).values > 0)])
             if self.N_t > 1:
                 mask_broadcast = torch.broadcast_to(calval_mask,(self.N_t//2+self.N_t%2,2,128,128))
                 mask = mask_broadcast.reshape(self.N_t+self.N_t%2,128,128)[:self.N_t]
@@ -245,10 +271,9 @@ class llc4320_dataset(Dataset):
         return torch.tensor(cmask.values)
 
     def get_cloud_mask_rho(self):
-        cloud_catalog_rho = self.cloud_catalog.where(self.cloud_catalog.rho>=self.cloud_rho,drop=True)
         masks = []
         for t in range(self.N_t):
-            sample_N = cloud_catalog_rho.isel(i_time = np.random.randint(len(cloud_catalog_rho.i_time)))
+            sample_N = self.cloud_catalog_rho.isel(i_time = np.random.randint(len(self.cloud_catalog_rho.i_time)))
             sample_N_tstep = int(sample_N.patch_timestep)
             sample_N_patch_ID = str(int(sample_N.patch_id)).zfill(3)
             path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{sample_N_patch_ID}.nc"
