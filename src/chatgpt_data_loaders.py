@@ -1,9 +1,18 @@
 import torch
+import os
 from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
 import threading
 import fsspec
+
+import sys
+if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
+    sys.path.append('/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/src')
+    sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
+else: 
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/src')
+import sys
 import interp_utils
 
 _thread_local = threading.local()
@@ -89,6 +98,14 @@ class llc4320_dataset(Dataset):
         _thread_local.cloud_catalog = xr.open_zarr(fs.get_mapper(f"{self.data_dir}/catalog.zarr")).compute()
         _thread_local.cloud_catalog_rho = _thread_local.cloud_catalog.where( _thread_local.cloud_catalog.rho>=self.cloud_rho, drop=True)
         _thread_local.initialized = True
+        
+        # Create mapper cache for cloud masks
+        cloud_mapper_dir = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks_zarr/"
+        mapper_dict = {}
+        for patch_id in np.unique(_thread_local.cloud_catalog_rho.patch_id.values):
+            pid2 = str(int(patch_id)).zfill(3)
+            mapper_dict[pid2] = fs.get_mapper(f"{cloud_mapper_dir}/{pid2}.zarr")
+        _thread_local.cloud_mask_mapper = mapper_dict
 
     def _load_fields(self, pid, fields, tkeys, mask_keys):
         vars, masks = [], []
@@ -144,10 +161,10 @@ class llc4320_dataset(Dataset):
             lat = np.random.uniform(sw_corner[1], ne_corner[1])
             ds = np.random.choice(_thread_local.swot_ds)
             m0 = interp_utils.grid_everything(
-                _thread_local.swot_ds[0].ssha.values, lat=lat, lon=lon,
+                _thread_local.swot_ds[0].ssha, lat=lat, lon=lon,
                 n=self.N, L_x=self.L_x, L_y=self.L_y).values
             m1 = interp_utils.grid_everything(
-                _thread_local.swot_ds[1].ssha.values, lat=lat, lon=lon,
+                _thread_local.swot_ds[1].ssha, lat=lat, lon=lon,
                 n=self.N, L_x=self.L_x, L_y=self.L_y).values
             m01 = np.stack([m0,m1])
         else:
@@ -188,17 +205,17 @@ class llc4320_dataset(Dataset):
         mask = (sliced * 0 + 1).where(sliced > 0, other=0)
         return torch.from_numpy(mask.values).float()
     
-
     def _get_cloud_rho_mask(self):
         cc = _thread_local.cloud_catalog_rho
         masks = []
         for _ in range(self.N_t):
             samp = cc.isel(i_time=np.random.randint(len(cc.i_time)))
             pid2 = str(int(samp.patch_id.values)).zfill(3)
-            mapper = _thread_local.fs.get_mapper(f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks_zarr/{pid2}.zarr")
-            d = xr.open_zarr(mapper, consolidated=True, decode_times=False)
-            masks.append(~np.isnan(d.sst_filtered_q5.isel(time=int(samp.patch_timestep))).values)
-        return torch.stack([torch.from_numpy(m.astype(np.float32)) for m in masks])
+            mapper = _thread_local.cloud_mask_mapper[pid2]
+            d = xr.open_zarr(mapper, consolidated=True)
+            m = ~np.isnan(d.sst_filtered_q5.isel(time=int(samp.patch_timestep)).values)
+            masks.append(torch.from_numpy(m.astype(np.float32)))
+        return torch.stack(masks)
 
     def _make_standardize(self, mean=None, std=1.0):
         def fn(x):
