@@ -46,7 +46,7 @@ class llc4320_dataset(Dataset):
             "std_global_mean_ssh_norm": self._make_standardize(mean=standards["mean_ssh"], std=standards["std_ssh"]),
             "std_global_mean_sst_norm": self._make_standardize(mean=standards["mean_sst"], std=standards["std_sst"]),
             "no_transform": lambda x: x
-        }
+                        }
 
     def __len__(self):
         return self.patch_coords.shape[0]
@@ -57,13 +57,13 @@ class llc4320_dataset(Dataset):
         if getattr(_thread_local, 'initialized', False) is False:
             self._init_worker_local()
         invar, inmask = self._load_fields(pid, self.infields,self.in_transform_list, self.in_mask_list)
-        if self.outfields:
+        if not self.outfields in [[], None, "None", "none"]:
             outvar, outmask = self._load_fields(pid, self.outfields,self.out_transform_list, self.out_mask_list)
         else:
             outvar = torch.zeros((self.N_t,1,self.N,self.N))
             outmask = torch.zeros_like(outvar)
         if self.squeeze:
-            invar,outvar = invar.squeeze(), outvar.squeeze()
+            invar, outvar, inmask, outmask = invar.squeeze(), outvar.squeeze(), inmask.squeeze(), outmask.squeeze()
         if self.return_meta_data:
             meta = {"patch_ID":pid, "patch_coords":coords,
                     "mid_timestep":self.mid_timestep}
@@ -76,7 +76,6 @@ class llc4320_dataset(Dataset):
         # Initialize per-worker resources
         fs = fsspec.filesystem("file", default_fill_cache=True, block_size=128*1024**2)
         _thread_local.fs = fs
-
         # Lazy load SWOT swaths or numpy mask catalog
         if self.regrid_SWOT:
             _thread_local.swot_ds = [
@@ -86,7 +85,6 @@ class llc4320_dataset(Dataset):
         else:
             _thread_local.swot_npy = np.load(
                 f"{self.data_dir}/swot_npy_mask_4km.npy", mmap_mode="r")*1
-
         # Lazy load cloud catalog
         _thread_local.cloud_catalog = xr.open_zarr(fs.get_mapper(f"{self.data_dir}/catalog.zarr")).compute()
         _thread_local.cloud_catalog_rho = _thread_local.cloud_catalog.where( _thread_local.cloud_catalog.rho>=self.cloud_rho, drop=True)
@@ -99,11 +97,12 @@ class llc4320_dataset(Dataset):
             ds = xr.open_zarr(mapper, consolidated=True, chunks={})
             d = ds.loc[{"patch":int(pid)}]
             d = d.isel(time=slice(self.mid_timestep - self.N_t//2,
-                                  self.mid_timestep + self.N_t//2))
+                                  self.mid_timestep + (self.N_t+1)//2))
             if isinstance(d, xr.Dataset):
                 d = next(iter(d.data_vars.values()))
             ten = self.transforms[tk](d.values)
             #ten = torch.from_numpy(arr.values).float()
+            
             mask = self._mask_dispatch(mask_key, pid, ten.shape)
             vars.append(ten * mask)
             masks.append(mask)
@@ -133,6 +132,8 @@ class llc4320_dataset(Dataset):
             raise ValueError(f"Unknown mask type: {mask_key}")
         if self.time_loading:
             print(f"[Timer] Mask '{mask_key}' generated in {time.perf_counter() - t0:.3f} sec")
+        if result.shape != shape:
+            result = torch.broadcast_to(result,shape)
         return result
 
     def _get_swot_mask(self,pid,version,sampling):
@@ -163,7 +164,7 @@ class llc4320_dataset(Dataset):
                 mask_broadcast = np.broadcast_to(m01,(self.N_t//2+self.N_t%2,2,128,128))
                 mask = mask_broadcast.reshape(self.N_t+self.N_t%2,128,128)[:self.N_t]
             else:
-                mask = np.random.choice([m01[0],m01[1]])
+                mask = [m01[0],m01[1]][np.random.randint(2)]
         return torch.from_numpy(mask)
 
     def _get_nadir_mask(self, patch_ID, version="random", sample_time="1D"):
@@ -195,7 +196,7 @@ class llc4320_dataset(Dataset):
             samp = cc.isel(i_time=np.random.randint(len(cc.i_time)))
             pid2 = str(int(samp.patch_id.values)).zfill(3)
             mapper = _thread_local.fs.get_mapper(f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks_zarr/{pid2}.zarr")
-            d = xr.open_zarr(mapper, consolidated=True)
+            d = xr.open_zarr(mapper, consolidated=True, decode_times=False)
             masks.append(~np.isnan(d.sst_filtered_q5.isel(time=int(samp.patch_timestep))).values)
         return torch.stack([torch.from_numpy(m.astype(np.float32)) for m in masks])
 

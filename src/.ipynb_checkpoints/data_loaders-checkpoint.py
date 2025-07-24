@@ -7,7 +7,7 @@ warnings.filterwarnings("ignore")
 import os
 from glob import glob
 import dask
-dask.config.set(scheduler='threads')  # allow parallel chunk I/O
+dask.config.set(scheduler='synchronous')  # allow parallel chunk I/O
 import time
 
 
@@ -47,7 +47,7 @@ class llc4320_dataset(Dataset):
                  in_transform_list, out_transform_list,
                  SST_quality_level=1, sst_only=False, sst_cloud_mask=False,
                  N=128, L_x=512e3, L_y=512e3, return_metadata=False,
-                 standards=None, squeeze=False, multiprocessing=False, device=None, cloud_rho=.7,
+                 standards=None, squeeze=False,device=None, cloud_rho=.7,
                  return_masks=False, time_loading=False, regrid_SWOT=False):
 
         self.device = device
@@ -188,7 +188,7 @@ class llc4320_dataset(Dataset):
                 print(f"KeyError {e} at patch {patch_id} for field {field}")
             # Slice temporal window
             t0 = int(self.mid_timestep - self.N_t // 2)
-            t1 = int(self.mid_timestep + self.N_t // 2)
+            t1 = int(self.mid_timestep + (self.N_t + 1) // 2)
             da = var_ds.isel(time=slice(t0, t1))
             if isinstance(da, xr.Dataset):
                 # This is a bad fix since it only takes in the "last" data variable in each dataset
@@ -197,7 +197,7 @@ class llc4320_dataset(Dataset):
             # Transform (in-place)
             da = self.transforms[transform_key](da)
             # Masking
-            mask_tensor = self.get_mask(mask_key, da)
+            mask_tensor = self.get_mask(mask_key, patch_id, da.shape)
             # Convert to tensor and mask
             tensor = torch.from_numpy(da.values).float()*mask_tensor
             #mask_tensor = torch.from_numpy(mask.astype(np.float32))
@@ -208,11 +208,11 @@ class llc4320_dataset(Dataset):
         mask_tensor = torch.stack(mask_tensors, dim=1)
         return var_tensor, mask_tensor
 
-    def get_mask(self, mask_key, patch_ID):
+    def get_mask(self, mask_key, patch_ID, shape):
         if self.time_loading:
             t0 = time.perf_counter()
         if (mask_key is None) or ("None" in mask_key):
-            return torch.tensor([1]).float()
+            return torch.ones(shape)
         elif "swot" in str(mask_key).lower():
             sampling="all"
             version="random"
@@ -254,7 +254,7 @@ class llc4320_dataset(Dataset):
             else: 
                 nrand = np.random.randint(2)
                 m0 = self.worker_generic_crossover_swaths[nrand,j_rand-64:j_rand+64,i_rand-64:i_rand+64]
-            mask = torch.from_numpy(m0.fillna(0).values > 0)*0
+            mask = torch.from_numpy(m0 > 0)*0
         elif version == "calval":
             if self.regrid_SWOT:
                 ms = [interp_utils.grid_everything(self.worker_generic_crossover_swaths[0].ssha[lat_min:lat_max:l_step,lon_i::l_step], lat, lon, n=self.N, L_x=self.L_x, L_y=self.L_y).values,
@@ -289,7 +289,7 @@ class llc4320_dataset(Dataset):
                  random_tile = xr.open_zarr(f"{self.data_dir}/copernicus_nadir_SSH/002.zarr",consolidated=True,chunks={}).sla_filtered
             random_tile = random_tile.resample(time=sample_time).mean()
             mid = np.random.randint(int(self.N_t / 2), len(random_tile.time) - int(self.N_t / 2))
-            nadir_mask = random_tile.isel(time=slice(mid - self.N_t//2, mid + self.N_t//2 + self.N_t%2))
+            nadir_mask = random_tile.isel(time=slice(mid - self.N_t//2, mid + (self.N_t+1)//2 + self.N_t%2))
             nadir_mask = (nadir_mask * 0 + 1).where(nadir_mask > 0, other=0)
         return torch.from_numpy(nadir_mask.values).float()
     
@@ -297,7 +297,7 @@ class llc4320_dataset(Dataset):
         path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks/{patch_ID}.nc"
         cmask = xr.open_dataset(path).sst_filtered_q5
         mid = np.random.randint(int(self.N_t / 2), len(cmask.time) - int(self.N_t / 2))
-        cmask = cmask.isel(time=slice(mid - self.N_t // 2, mid + self.N_t // 2))
+        cmask = cmask.isel(time=slice(mid - self.N_t // 2, mid + (self.N_t+1) // 2))
         cmask = (cmask * 0 + 1).where(cmask > 0, other=0)
         return torch.from_numpy(cmask.values).float()
     
@@ -311,6 +311,6 @@ class llc4320_dataset(Dataset):
             sample_N_tstep = int(sample_N.patch_timestep)
             sample_N_patch_ID = str(int(sample_N.patch_id)).zfill(3)
             path = f"{self.data_dir}/HRS_SST_tiles/agg_cloud_masks_zarr/{sample_N_patch_ID}.zarr"
-            masks.append(~np.isnan(xr.open_zarr(path,chunks={},consolidated=True).sst_filtered_q5.isel(time=sample_N_tstep)))
+            masks.append(~np.isnan(xr.open_zarr(path,chunks={},consolidated=True,decode_times=False).sst_filtered_q5.isel(time=sample_N_tstep)))
         return torch.from_numpy(np.stack(masks,axis=0)).float()
 
