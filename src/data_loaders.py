@@ -212,7 +212,9 @@ class llc4320_dataset(Dataset):
         if self.time_loading:
             t0 = time.perf_counter()
         if (mask_key is None) or ("None" in mask_key):
-            return torch.ones(shape)
+            return torch.ones(shape
+        if "null_field" in mask_key.lower():
+            return torch.zeros(shape, dtype=torch.float32)
         elif "swot" in str(mask_key).lower():
             sampling="all"
             version="random"

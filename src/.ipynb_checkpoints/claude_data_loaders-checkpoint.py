@@ -55,8 +55,12 @@ class llc4320_dataset(Dataset):
         self.cloud_cache_size = cloud_cache_size
         self.zarr_cache_size = zarr_cache_size
 
+        if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
+            climpath = '/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/data'
+        else: 
+            climpath = '/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/data'
         # Load SST climatology for seasonal normalization
-        self.SST_mean_climatology = xr.open_dataset("SWOT-inpainting-DL/data/SST_NP_daily_climatology.nc")
+        self.SST_mean_climatology = xr.open_dataset(os.path.join(climpath,"SST_NP_daily_climatology.nc"))
 
         if standards is None:
             standards = {"mean_ssh":0., "std_ssh":1., "mean_sst":0., "std_sst":1., "extra_mean_tuning":0.,}
@@ -80,14 +84,12 @@ class llc4320_dataset(Dataset):
                     arr = x.values if isinstance(x, xr.DataArray) else x
                     return torch.from_numpy((arr / std).astype(np.float32))
             return fn
-        
         def make_std_samplewise(std=1.0):
             def fn(x):
                 arr = x.values if isinstance(x, xr.DataArray) else x
                 mean_val = arr.mean()
                 return torch.from_numpy(((arr - mean_val) / std).astype(np.float32))
             return fn
-
         def make_seasonal_standardize(std=5.0,extra_mean_tuning=0):
             """Create seasonal standardization function that uses climatological mean"""
             def fn(x):
@@ -118,7 +120,6 @@ class llc4320_dataset(Dataset):
                     normalized_arr = (arr - clim_mean - extra_mean_tuning) / std
                 return torch.from_numpy(normalized_arr.astype(np.float32))
             return fn
-            
         return {
             "std_ssh_norm": make_standardize(std=standards["std_ssh"]),
             "std_sst_norm": make_standardize(std=standards["std_sst"]),
@@ -141,6 +142,7 @@ class llc4320_dataset(Dataset):
     def __getitem__(self, idx):
         pid = str(int(self.patch_coords[idx,2])).zfill(3)
         coords = self.patch_coords[idx]
+        meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
         if getattr(_thread_local, 'initialized', False) is False:
             self._init_worker_local()
         invar, inmask = self._load_fields(pid, self.infields, self.in_transform_list, self.in_mask_list)
@@ -151,8 +153,10 @@ class llc4320_dataset(Dataset):
             outmask = torch.zeros_like(outvar)
         if self.squeeze:
             invar, outvar = invar.squeeze(), outvar.squeeze()
-        if self.return_meta_data:
-            meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
+            inmask, outmask = inmask.squeeze(), outmask.squeeze()
+        if self.return_meta_data and self.return_masks:
+            return invar, outvar, inmask, outmask, meta
+        elif self.return_meta_data:
             return invar, outvar, meta
         elif self.return_masks:
             return invar, outvar, inmask, outmask
@@ -226,7 +230,7 @@ class llc4320_dataset(Dataset):
             ds = self._get_cached_zarr_dataset(path, threading.get_ident())
             d = ds.loc[{"patch": int(pid)}]
             d = d.isel(time=slice(self.mid_timestep - self.N_t//2,
-                                  self.mid_timestep + self.N_t//2))
+                                  self.mid_timestep + self.N_t//2 + self.N_t%2))
             if isinstance(d, xr.Dataset):
                 d = next(iter(d.data_vars.values()))
             # Apply transform directly
@@ -239,6 +243,8 @@ class llc4320_dataset(Dataset):
     def _mask_dispatch(self, mask_key, pid, shape):
         if (mask_key is None) or ("None" in mask_key):
             return torch.ones(shape, dtype=torch.float32)
+        if "null_field" in mask_key.lower():
+            return torch.zeros(shape, dtype=torch.float32)
         elif "swot" in mask_key.lower():
             sampling = "all"
             version = "random"
@@ -334,8 +340,10 @@ class llc4320_dataset(Dataset):
                 mask_broadcast = np.broadcast_to(m01, (self.N_t//2 + self.N_t%2, 2, 128, 128))
                 mask = mask_broadcast.reshape(self.N_t + self.N_t%2, 128, 128)[:self.N_t]
             else:
-                mask = np.random.choice([m01[0], m01[1]])
+                #print("m01.shape",m01.shape)
+                mask = m01[np.random.randint(1)]
                 mask = mask.astype(np.float32)
+                #print("mask.shape",mask.shape)
         return torch.from_numpy(mask)
 
     def _get_nadir_mask(self, patch_ID, version="random", sample_time="1D"):

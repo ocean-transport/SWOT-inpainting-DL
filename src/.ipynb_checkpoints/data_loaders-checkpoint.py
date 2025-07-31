@@ -204,15 +204,17 @@ class llc4320_dataset(Dataset):
             var_tensors.append(tensor)
             mask_tensors.append(mask_tensor)
         # Stack fields into [T, C, H, W] style
-        var_tensor = torch.stack(var_tensors, dim=1)  # dim=1 → channel dimension
-        mask_tensor = torch.stack(mask_tensors, dim=1)
+        var_tensor = torch.stack(var_tensors, dim=-3)  # dim=1 → channel dimension
+        mask_tensor = torch.stack(mask_tensors, dim=-3)
         return var_tensor, mask_tensor
 
     def get_mask(self, mask_key, patch_ID, shape):
         if self.time_loading:
             t0 = time.perf_counter()
         if (mask_key is None) or ("None" in mask_key):
-            return torch.ones(shape)
+            return torch.ones(shape
+        if "null_field" in mask_key.lower():
+            return torch.zeros(shape, dtype=torch.float32)
         elif "swot" in str(mask_key).lower():
             sampling="all"
             version="random"

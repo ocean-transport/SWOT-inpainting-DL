@@ -128,6 +128,8 @@ class llc4320_dataset(Dataset):
     def _mask_dispatch(self, mask_key, pid, shape):
         if (mask_key is None) or ("None" in mask_key):
             return torch.ones(shape)
+        if "null_field" in mask_key.lower():
+            return torch.zeros(shape, dtype=torch.float32)
         elif "swot" in mask_key.lower():
             sampling="all"
             version="random"
