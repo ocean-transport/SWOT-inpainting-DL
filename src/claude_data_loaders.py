@@ -12,9 +12,12 @@ import sys
 if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
     sys.path.append('/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/src')
     sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
-else: 
+elif os.path.exists('/home.ufs/tm3076/swot_SUM03/SWOT_project/'):
     sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/src')
-import sys
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src')
+elif os.path.exists('/scratch/tm3076/project/'):
+    sys.path.append('/scratch/tm3076/project/SWOT-inpainting-DL/src')
+    sys.path.append('/scratch/tm3076/project/SWOT-data-analysis/src')
 import interp_utils
 
 _thread_local = threading.local()
@@ -57,8 +60,10 @@ class llc4320_dataset(Dataset):
 
         if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
             climpath = '/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/data'
-        else: 
+        elif os.path.exists("/home.ufs/tm3076/swot_SUM03/SWOT_project/"): 
             climpath = '/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/data'
+        elif os.path.exists("/scratch/tm3076/project/"):
+            climpath = '/scratch/tm3076/project/SWOT-inpainting-DL/data'
         # Load SST climatology for seasonal normalization
         self.SST_mean_climatology = xr.open_dataset(os.path.join(climpath,"SST_NP_daily_climatology.nc"))
 
