@@ -31,6 +31,7 @@ class llc4320_dataset(Dataset):
                  squeeze=False, return_metadata=False,
                  return_masks=False, time_loading=False,
                  regrid_SWOT=False, cloud_rho=0.7,
+                 squeeze_single_channel=True,
                  # New optimization parameters
                  preload_cloud_masks=True, cloud_cache_size=1000,
                  zarr_cache_size=256*1024**2):
@@ -52,6 +53,7 @@ class llc4320_dataset(Dataset):
         self.time_loading = time_loading
         self.regrid_SWOT = regrid_SWOT
         self.cloud_rho = cloud_rho
+        self.squeeze_single_channel = squeeze_single_channel
         
         # Optimization parameters
         self.preload_cloud_masks = preload_cloud_masks
@@ -164,7 +166,7 @@ class llc4320_dataset(Dataset):
             result.extend([inmask, outmask])
         if self.return_meta_data:
             result.append(meta)
-        if len(result) == 1:
+        if len(result) == 1 and self.squeeze_single_channel:
             return result[0]
         return tuple(result)
 
