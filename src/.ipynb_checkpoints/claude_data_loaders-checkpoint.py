@@ -7,14 +7,18 @@ import threading
 import fsspec
 from functools import lru_cache
 import time
+import glob
 
 import sys
 if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
     sys.path.append('/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/src')
     sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
-else: 
+elif os.path.exists('/home.ufs/tm3076/swot_SUM03/SWOT_project/'):
     sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/src')
-import sys
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src')
+elif os.path.exists('/scratch/tm3076/project/'):
+    sys.path.append('/scratch/tm3076/project/SWOT-inpainting-DL/src')
+    sys.path.append('/scratch/tm3076/project/SWOT-data-analysis/src')
 import interp_utils
 
 _thread_local = threading.local()
@@ -30,6 +34,7 @@ class llc4320_dataset(Dataset):
                  regrid_SWOT=False, cloud_rho=0.7,
                  # New optimization parameters
                  preload_cloud_masks=True, cloud_cache_size=1000,
+                 dtime = 1, # Time discretization, if you are using fullt
                  zarr_cache_size=256*1024**2):
 
         self.data_dir = data_dir
@@ -49,6 +54,7 @@ class llc4320_dataset(Dataset):
         self.time_loading = time_loading
         self.regrid_SWOT = regrid_SWOT
         self.cloud_rho = cloud_rho
+        self.dtime = dtime
         
         # Optimization parameters
         self.preload_cloud_masks = preload_cloud_masks
@@ -91,19 +97,22 @@ class llc4320_dataset(Dataset):
                 return torch.from_numpy(((arr - mean_val) / std).astype(np.float32))
             return fn
         def make_seasonal_standardize(std=5.0,extra_mean_tuning=0):
-            """Create seasonal standardization function that uses climatological mean"""
+            """Create seasonal standardization function that uses daily climatological mean"""
             def fn(x):
                 arr = x.values if isinstance(x, xr.DataArray) else x
+                #print(f"arr.shape {arr.shape}")
                 # Get the time slice indices for this sample
-                time_start = self.mid_timestep - self.N_t//2
-                time_end = self.mid_timestep + self.N_t//2 + self.N_t%2
-                time_indices = np.arange(time_start, time_end)
-                # Extract climatological means for the corresponding time indices
+                time_start = self.mid_timestep - self.dtime*(self.N_t//2)
+                time_end = self.mid_timestep + self.dtime*(self.N_t//2 + self.N_t%2)
+                time_indices = np.arange(time_start, time_end, self.dtime)
+                if self.dtime > 1: # convert from hourly to daily timesteps if dtime is greater than 1
+                    time_indices = time_indices//24
+                # Extract climatological means for the corresponding daily indices
                 # Handle potential out-of-bounds indices by wrapping or clamping
-                climatology_length = len(self.SST_mean_climatology.SST)  # Adjust variable name as needed
+                climatology_length = len(self.SST_mean_climatology.SST)  
                 clipped_indices = np.clip(time_indices, 0, climatology_length - 1)
                 # Get climatological means for this time window
-                clim_means = self.SST_mean_climatology.SST.isel(time=clipped_indices).values  # Adjust variable name as needed
+                clim_means = self.SST_mean_climatology.SST.isel(time=clipped_indices).values  
                 # Subtract climatological mean from each time step
                 # arr shape is typically (time, y, x), clim_means shape is (time,)
                 if len(arr.shape) == 3:  # (time, y, x)
@@ -177,6 +186,9 @@ class llc4320_dataset(Dataset):
         else:
             _thread_local.swot_npy = np.load(
                 f"{self.data_dir}/swot_npy_mask_4km.npy", mmap_mode="r") * 1
+            _thread_local.swot_science_npy = [np.load(science_mask) 
+                                              for science_mask in sorted(glob.glob(f"{self.data_dir}/example_science_phase/SWOT*.npy"))
+                                             ]
         # Load and process cloud catalog once
         _thread_local.cloud_catalog = xr.open_zarr(
             fs.get_mapper(f"{self.data_dir}/catalog.zarr")).compute()
@@ -226,11 +238,19 @@ class llc4320_dataset(Dataset):
         vars, masks = [], []
         for fld, tk, mask_key in zip(fields, tkeys, mask_keys):
             # Use cached zarr opening
-            path = f"{self.data_dir}/{fld}_allpatches.zarr"
-            ds = self._get_cached_zarr_dataset(path, threading.get_ident())
-            d = ds.loc[{"patch": int(pid)}]
-            d = d.isel(time=slice(self.mid_timestep - self.N_t//2,
-                                  self.mid_timestep + self.N_t//2 + self.N_t%2))
+            if "fullt" in fld:
+                path = f"{self.data_dir}/{fld}/{pid}.zarr"
+                d = self._get_cached_zarr_dataset(path, threading.get_ident())
+                time_slice = slice(self.mid_timestep - self.dtime*(self.N_t//2),
+                                      self.mid_timestep + self.dtime*(self.N_t//2 + self.N_t%2),
+                                      self.dtime)
+                d = d.isel(time=time_slice)
+            else:
+                path = f"{self.data_dir}/{fld}_allpatches.zarr"
+                ds = self._get_cached_zarr_dataset(path, threading.get_ident())
+                d = ds.loc[{"patch": int(pid)}]
+                d = d.isel(time=slice(self.mid_timestep - self.N_t//2,
+                                      self.mid_timestep + self.N_t//2 + self.N_t%2))
             if isinstance(d, xr.Dataset):
                 d = next(iter(d.data_vars.values()))
             # Apply transform directly
@@ -250,6 +270,8 @@ class llc4320_dataset(Dataset):
             version = "random"
             if "calval" in mask_key.lower():
                 version = "calval"
+            if "science" in mask_key.lower():
+                version = "science"
             if "central" in mask_key.lower():
                 sampling = "central"
             if "random" in mask_key.lower():
@@ -326,6 +348,24 @@ class llc4320_dataset(Dataset):
                 _thread_local.swot_ds[1].ssha, lat=lat, lon=lon,
                 n=self.N, L_x=self.L_x, L_y=self.L_y).values
             m01 = np.stack([m0, m1])
+        elif version == "science":
+            # The science phase generally consists of 5-7 12-hrly passes moving East-West
+            # pick one at random here for sampling / training
+            m_science = _thread_local.swot_science_npy[np.random.randint(len(_thread_local.swot_science_npy))]
+            mask = np.zeros([self.N_t] + list(m_science.shape)[-2:])
+            center_mask, center_science, = len(mask)//2, len(m_science)//2
+            if len(mask) >= len(m_science): 
+                # Science fits within mask time length
+                mask_0 = center_mask - (len(m_science)//2)
+                mask_1 = mask_0 + len(m_science)
+                mask[mask_0:mask_1] += (m_science > 0)
+            else:  
+                # The science phase time series is larger than the mask length,
+                # Trim the science phase mask to fit the ssh mask
+                m_science_0 = center_science - (len(mask) //2)
+                m_science_1 = m_science_0 + len(mask)
+                mask += (m_science[m_science_0:m_science_1] > 0)
+            return torch.from_numpy(mask)
         else:
             i_rand = np.random.randint(64, 225-64)
             j_rand = np.random.randint(128, 800-64)
@@ -340,10 +380,8 @@ class llc4320_dataset(Dataset):
                 mask_broadcast = np.broadcast_to(m01, (self.N_t//2 + self.N_t%2, 2, 128, 128))
                 mask = mask_broadcast.reshape(self.N_t + self.N_t%2, 128, 128)[:self.N_t]
             else:
-                #print("m01.shape",m01.shape)
                 mask = m01[np.random.randint(1)]
                 mask = mask.astype(np.float32)
-                #print("mask.shape",mask.shape)
         return torch.from_numpy(mask)
 
     def _get_nadir_mask(self, patch_ID, version="random", sample_time="1D"):
