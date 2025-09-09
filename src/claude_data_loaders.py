@@ -189,6 +189,9 @@ class llc4320_dataset(Dataset):
             _thread_local.swot_science_npy = [np.load(science_mask) 
                                               for science_mask in sorted(glob.glob(f"{self.data_dir}/example_science_phase/SWOT*.npy"))
                                              ]
+            _thread_local.swot_science_cycle_npy = [np.load(science_mask) 
+                                              for science_mask in sorted(glob.glob(f"{self.data_dir}/example_science_phase/cycle_SWOT*.npy"))
+                                             ]
         # Load and process cloud catalog once
         _thread_local.cloud_catalog = xr.open_zarr(
             fs.get_mapper(f"{self.data_dir}/catalog.zarr")).compute()
@@ -272,6 +275,8 @@ class llc4320_dataset(Dataset):
                 version = "calval"
             if "science" in mask_key.lower():
                 version = "science"
+            if "cycle" in mask_key.lower():
+                version = "cycle"
             if "central" in mask_key.lower():
                 sampling = "central"
             if "random" in mask_key.lower():
@@ -348,6 +353,24 @@ class llc4320_dataset(Dataset):
                 _thread_local.swot_ds[1].ssha, lat=lat, lon=lon,
                 n=self.N, L_x=self.L_x, L_y=self.L_y).values
             m01 = np.stack([m0, m1])
+        elif version == "cycle":
+            # The science phase generally consists of 5-7 12-hrly passes moving East-West
+            # pick one at random here for sampling / training
+            m_science = _thread_local.swot_science_cycle_npy[np.random.randint(len(_thread_local.swot_science_cycle_npy))]
+            mask = np.zeros([self.N_t] + list(m_science.shape)[-2:])
+            center_mask, center_science, = len(mask)//2, len(m_science)//2
+            if len(mask) >= len(m_science): 
+                # Science fits within mask time length
+                mask_0 = center_mask - (len(m_science)//2)
+                mask_1 = mask_0 + len(m_science)
+                mask[mask_0:mask_1] += (m_science > 0)
+            else:  
+                # The science phase time series is larger than the mask length,
+                # Trim the science phase mask to fit the ssh mask
+                m_science_0 = center_science - (len(mask) //2)
+                m_science_1 = m_science_0 + len(mask)
+                mask += (m_science[m_science_0:m_science_1] > 0)
+            return torch.from_numpy(mask)
         elif version == "science":
             # The science phase generally consists of 5-7 12-hrly passes moving East-West
             # pick one at random here for sampling / training
