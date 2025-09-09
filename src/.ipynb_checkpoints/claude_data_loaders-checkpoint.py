@@ -32,6 +32,7 @@ class llc4320_dataset(Dataset):
                  squeeze=False, return_metadata=False,
                  return_masks=False, time_loading=False,
                  regrid_SWOT=False, cloud_rho=0.7,
+                 squeeze_single_channel=True,
                  # New optimization parameters
                  preload_cloud_masks=True, cloud_cache_size=1000,
                  dtime = 1, # Time discretization, if you are using fullt
@@ -63,8 +64,10 @@ class llc4320_dataset(Dataset):
 
         if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
             climpath = '/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/data'
-        else: 
+        elif os.path.exists("/home.ufs/tm3076/swot_SUM03/SWOT_project/"): 
             climpath = '/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/data'
+        elif os.path.exists("/scratch/tm3076/project/"):
+            climpath = '/scratch/tm3076/project/SWOT-inpainting-DL/data'
         # Load SST climatology for seasonal normalization
         self.SST_mean_climatology = xr.open_dataset(os.path.join(climpath,"SST_NP_daily_climatology.nc"))
 
@@ -147,12 +150,12 @@ class llc4320_dataset(Dataset):
 
     def __len__(self):
         return self.patch_coords.shape[0]
-
+    
     def __getitem__(self, idx):
-        pid = str(int(self.patch_coords[idx,2])).zfill(3)
+        pid = str(int(self.patch_coords[idx, 2])).zfill(3)
         coords = self.patch_coords[idx]
         meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
-        if getattr(_thread_local, 'initialized', False) is False:
+        if not getattr(_thread_local, 'initialized', False):
             self._init_worker_local()
         invar, inmask = self._load_fields(pid, self.infields, self.in_transform_list, self.in_mask_list)
         if self.outfields:
@@ -163,13 +166,14 @@ class llc4320_dataset(Dataset):
         if self.squeeze:
             invar, outvar = invar.squeeze(), outvar.squeeze()
             inmask, outmask = inmask.squeeze(), outmask.squeeze()
-        if self.return_meta_data and self.return_masks:
-            return invar, outvar, inmask, outmask, meta
-        elif self.return_meta_data:
-            return invar, outvar, meta
-        elif self.return_masks:
-            return invar, outvar, inmask, outmask
-        return invar, outvar
+        result = [invar, outvar]
+        if self.return_masks:
+            result.extend([inmask, outmask])
+        if self.return_meta_data:
+            result.append(meta)
+        if len(result) == 1 and self.squeeze_single_channel:
+            return result[0]
+        return tuple(result)
 
     def _init_worker_local(self):
         """Initialize per-worker resources with optimizations"""
@@ -427,3 +431,5 @@ class llc4320_dataset(Dataset):
         # Optimized mask computation
         mask_values = np.where(sliced.values > 0, 1.0, 0.0).astype(np.float32)
         return torch.from_numpy(mask_values)
+
+
