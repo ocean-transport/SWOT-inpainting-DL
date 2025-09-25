@@ -152,28 +152,56 @@ class llc4320_dataset(Dataset):
         return self.patch_coords.shape[0]
     
     def __getitem__(self, idx):
-        pid = str(int(self.patch_coords[idx, 2])).zfill(3)
-        coords = self.patch_coords[idx]
-        meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
-        if not getattr(_thread_local, 'initialized', False):
-            self._init_worker_local()
-        invar, inmask = self._load_fields(pid, self.infields, self.in_transform_list, self.in_mask_list)
-        if self.outfields:
-            outvar, outmask = self._load_fields(pid, self.outfields, self.out_transform_list, self.out_mask_list)
-        else:
-            outvar = torch.zeros((self.N_t, 1, self.N, self.N), dtype=torch.float32)
-            outmask = torch.zeros_like(outvar)
-        if self.squeeze:
-            invar, outvar = invar.squeeze(), outvar.squeeze()
-            inmask, outmask = inmask.squeeze(), outmask.squeeze()
-        result = [invar, outvar]
-        if self.return_masks:
-            result.extend([inmask, outmask])
-        if self.return_meta_data:
-            result.append(meta)
-        if len(result) == 1 and self.squeeze_single_channel:
-            return result[0]
-        return tuple(result)
+        try:
+            pid = str(int(self.patch_coords[idx, 2])).zfill(3)
+            coords = self.patch_coords[idx]
+            meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
+            if not getattr(_thread_local, 'initialized', False):
+                self._init_worker_local()
+            invar, inmask = self._load_fields(pid, self.infields, self.in_transform_list, self.in_mask_list)
+            if self.outfields:
+                outvar, outmask = self._load_fields(pid, self.outfields, self.out_transform_list, self.out_mask_list)
+            else:
+                outvar = torch.zeros((self.N_t, 1, self.N, self.N), dtype=torch.float32)
+                outmask = torch.zeros_like(outvar)
+            if self.squeeze:
+                invar, outvar = invar.squeeze(), outvar.squeeze()
+                inmask, outmask = inmask.squeeze(), outmask.squeeze()
+            result = [invar, outvar]
+            if self.return_masks:
+                result.extend([inmask, outmask])
+            if self.return_meta_data:
+                result.append(meta)
+            if len(result) == 1 and self.squeeze_single_channel:
+                return result[0]
+            return tuple(result)
+        except Exception as e:
+            print(f"Failed to load patch {idx}, falling back to idx=100")
+            print(f"Exception: {e}")
+            print()
+            idx = 100
+            pid = str(int(self.patch_coords[idx, 2])).zfill(3)
+            coords = self.patch_coords[idx]
+            meta = {"patch_ID": pid, "patch_coords": coords, "mid_timestep": self.mid_timestep}
+            if not getattr(_thread_local, 'initialized', False):
+                self._init_worker_local()
+            invar, inmask = self._load_fields(pid, self.infields, self.in_transform_list, self.in_mask_list)
+            if self.outfields:
+                outvar, outmask = self._load_fields(pid, self.outfields, self.out_transform_list, self.out_mask_list)
+            else:
+                outvar = torch.zeros((self.N_t, 1, self.N, self.N), dtype=torch.float32)
+                outmask = torch.zeros_like(outvar)
+            if self.squeeze:
+                invar, outvar = invar.squeeze(), outvar.squeeze()
+                inmask, outmask = inmask.squeeze(), outmask.squeeze()
+            result = [invar, outvar]
+            if self.return_masks:
+                result.extend([inmask, outmask])
+            if self.return_meta_data:
+                result.append(meta)
+            if len(result) == 1 and self.squeeze_single_channel:
+                return result[0]
+            return tuple(result)
 
     def _init_worker_local(self):
         """Initialize per-worker resources with optimizations"""
@@ -237,7 +265,7 @@ class llc4320_dataset(Dataset):
         cache_key = f"{path}_{worker_id}"
         if cache_key not in _thread_local.zarr_cache:
             mapper = _thread_local.fs.get_mapper(path)
-            _thread_local.zarr_cache[cache_key] = xr.open_zarr(mapper, consolidated=True, chunks={})
+            _thread_local.zarr_cache[cache_key] = xr.open_zarr(mapper, consolidated=True, chunks={}, decode_times=False)
         return _thread_local.zarr_cache[cache_key]
 
     def _load_fields(self, pid, fields, tkeys, mask_keys):
@@ -414,12 +442,12 @@ class llc4320_dataset(Dataset):
     def _get_nadir_mask(self, patch_ID, version="random", sample_time="1D"):
         """Optimized nadir mask generation"""
         try:
-            rand_index = np.random.randint(422)
-            path = f"{self.data_dir}/copernicus_nadir_SSH_daily/{rand_index:03}.zarr"
+            rand_index = np.random.randint(414)
+            path = f"{self.data_dir}/N_PACIFIC_12hrly_chuncked_copernicus_nadir_SSH/{rand_index:03}.zarr"
             da = self._get_cached_zarr_dataset(path, threading.get_ident())
             random_tile = da.sla_filtered
         except Exception as e:
-            fallback_path = f"{self.data_dir}/copernicus_nadir_SSH_daily/002.zarr"
+            fallback_path = f"{self.data_dir}/N_PACIFIC_12hrly_chuncked_copernicus_nadir_SSH/002.zarr"
             da = self._get_cached_zarr_dataset(fallback_path, threading.get_ident())
             if self.time_loading:
                 print(f"BAD MAPPER {rand_index} Exception: {e}")
